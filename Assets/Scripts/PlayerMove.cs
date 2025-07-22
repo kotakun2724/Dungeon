@@ -55,7 +55,7 @@ public class PlayerMovement : MonoBehaviour
         CreatePlayerPhysicsMaterial();
 
         animator = GetComponent<Animator>();
-        cam = FindObjectOfType<PlayerCameraController>();
+        cam = FindFirstObjectByType<PlayerCameraController>();
     }
 
     void CreatePlayerPhysicsMaterial()

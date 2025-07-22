@@ -40,7 +40,7 @@ public class Dungeon2DController : MonoBehaviour
         // PlayerSpawnerコンポーネントを取得（なければ検索）
         if (playerSpawner == null)
         {
-            playerSpawner = FindObjectOfType<PlayerSpawner>();
+            playerSpawner = FindFirstObjectByType<PlayerSpawner>();
             Debug.Log("PlayerSpawner検索結果: " + (playerSpawner != null ? "見つかりました" : "見つかりませんでした"));
         }
     }
@@ -96,7 +96,7 @@ public class Dungeon2DController : MonoBehaviour
         else
         {
             // プレイヤースポナーがなければ、再度検索を試みる
-            playerSpawner = FindObjectOfType<PlayerSpawner>();
+            playerSpawner = FindFirstObjectByType<PlayerSpawner>();
             if (playerSpawner != null)
             {
                 Debug.Log("プレイヤー生成開始（再検索後）...");
@@ -122,7 +122,7 @@ public class Dungeon2DController : MonoBehaviour
     {
         if (playerSpawner == null)
         {
-            playerSpawner = FindObjectOfType<PlayerSpawner>();
+            playerSpawner = FindFirstObjectByType<PlayerSpawner>();
             Debug.Log("PlayerSpawner検索結果: " + (playerSpawner != null ? "見つかりました" : "見つかりませんでした"));
         }
         else
