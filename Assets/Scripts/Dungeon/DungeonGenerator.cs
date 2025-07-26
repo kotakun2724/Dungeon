@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using DungeonGen.Generation;
 
 [ExecuteAlways]
 public class DungeonGenerator : MonoBehaviour
@@ -22,9 +23,9 @@ public class DungeonGenerator : MonoBehaviour
     [SerializeField] private GameObject pathWallPrefab;
     [SerializeField] private GameObject pathCeilingPrefab;
 
-    [Header("Multiple Prefabs from Resources")]
-    [Tooltip("複数Prefabを使用するか（単一Prefabを無効化）")]
-    [SerializeField] private bool useMultiplePrefabs = false;
+    [Header("Random Prefab System")]
+    [Tooltip("ランダムプレハブシステムを有効にするか")]
+    [SerializeField] private bool enableRandomPrefabs = false;
     [Tooltip("Resources/フォルダ内の部屋床Prefabパス（例: Floor/Room）")]
     [SerializeField] private string roomFloorPrefabPath = "Floor/Room";
     [Tooltip("Resources/フォルダ内の部屋壁Prefabパス（例: Wall/Room）")]
@@ -41,6 +42,20 @@ public class DungeonGenerator : MonoBehaviour
     [SerializeField] private bool debugPrefabSelection = false;
     [Tooltip("詳細なデバッグログを表示するか（問題解決後はfalseに）")]
     [SerializeField] private bool verboseDebugLogs = true;
+
+    [Header("Random Prefab Probabilities")]
+    [Tooltip("部屋床でランダムプレハブを使用する確率 (0.0-1.0)")]
+    [Range(0f, 1f)] public float roomFloorRandomChance = 0.2f;
+    [Tooltip("部屋壁でランダムプレハブを使用する確率 (0.0-1.0)")]
+    [Range(0f, 1f)] public float roomWallRandomChance = 0.2f;
+    [Tooltip("部屋天井でランダムプレハブを使用する確率 (0.0-1.0)")]
+    [Range(0f, 1f)] public float roomCeilingRandomChance = 0.2f;
+    [Tooltip("通路床でランダムプレハブを使用する確率 (0.0-1.0)")]
+    [Range(0f, 1f)] public float pathFloorRandomChance = 0.2f;
+    [Tooltip("通路壁でランダムプレハブを使用する確率 (0.0-1.0)")]
+    [Range(0f, 1f)] public float pathWallRandomChance = 0.2f;
+    [Tooltip("通路天井でランダムプレハブを使用する確率 (0.0-1.0)")]
+    [Range(0f, 1f)] public float pathCeilingRandomChance = 0.2f;
 
     [Header("Global size (cells)")]
     [SerializeField] private Vector2Int dungeonSize = new(64, 64);
@@ -87,6 +102,34 @@ public class DungeonGenerator : MonoBehaviour
     [Tooltip("通路の天井を回転させるか")]
     [SerializeField] private bool rotatePathCeilings = true;
 
+    [Header("Game Sequence")]
+    [Tooltip("スタートルームとゴールルームを自動設定するか")]
+    [SerializeField] private bool enableGameSequence = true;
+    [Tooltip("スタートルームとゴールルームの最小距離（部屋数）")]
+    [SerializeField] private int minRoomDistance = 3;
+
+    [Header("Goal Room Settings")]
+    [Tooltip("ゴールルーム専用の床Prefab")]
+    [SerializeField] private GameObject goalRoomFloorPrefab;
+    [Tooltip("ゴールルーム床の高さオフセット")]
+    [SerializeField] private float goalRoomFloorYOffset = 0.0f;
+
+    [Header("Player Spawning")]
+    [Tooltip("プレイヤー自動生成を有効にするか")]
+    [SerializeField] private bool enablePlayerSpawning = true;
+    [Tooltip("プレイヤープレハブ")]
+    [SerializeField] private GameObject playerPrefab;
+    [Tooltip("プレイヤー生成高さオフセット")]
+    [SerializeField] private float playerSpawnHeight = 0.5f;
+
+    [Header("Light Shadow Management")]
+    [Tooltip("ダンジョン生成時にライトの影を自動的に無効化するか")]
+    [SerializeField] private bool disableLightShadowsOnGeneration = true;
+    [Tooltip("DynamicLightShadowManagerを自動生成するか")]
+    [SerializeField] private bool autoCreateShadowManager = true;
+    [Tooltip("影管理システムのデバッグログを有効にするか")]
+    [SerializeField] private bool enableShadowManagerDebug = false;
+
     [Header("Debug / Seed")]
     [SerializeField] private bool randomSeed = true;
     [SerializeField] private int seed = 0;
@@ -126,6 +169,23 @@ public class DungeonGenerator : MonoBehaviour
     private readonly List<Vector2Int> isolatedPaths = new();
     private System.Random rng;
 
+    // Game Sequence variables
+    private RectInt startRoom;
+    private RectInt goalRoom;
+    private bool hasValidStartGoal = false;
+
+    // Player spawning variables
+    private GameObject currentPlayer;
+
+    // Light shadow management
+    private DynamicLightShadowManager shadowManager;
+
+    // Public accessors for other components
+    public bool HasValidStartGoal => hasValidStartGoal;
+    public RectInt StartRoom => startRoom;
+    public RectInt GoalRoom => goalRoom;
+    public GameObject CurrentPlayer => currentPlayer;
+
     // Multiple Prefabs Arrays
     private GameObject[] roomFloorPrefabs;
     private GameObject[] roomWallPrefabs;
@@ -164,6 +224,10 @@ public class DungeonGenerator : MonoBehaviour
         Debug.Log($"Room Generation: {sw.ElapsedMilliseconds}ms");
 
         sw.Restart();
+        SelectStartAndGoalRooms();
+        Debug.Log($"Start/Goal Room Selection: {sw.ElapsedMilliseconds}ms");
+
+        sw.Restart();
         ConnectAllRooms();
         Debug.Log($"MST Connection: {sw.ElapsedMilliseconds}ms");
 
@@ -191,6 +255,18 @@ public class DungeonGenerator : MonoBehaviour
         InstantiateWalls();
         Debug.Log($"Wall Generation: {sw.ElapsedMilliseconds}ms");
 
+        sw.Restart();
+        SpawnPlayerInStartRoom();
+        Debug.Log($"Player Spawning: {sw.ElapsedMilliseconds}ms");
+
+        sw.Restart();
+        SetupGoalRoomTriggers();
+        Debug.Log($"Goal Room Trigger Setup: {sw.ElapsedMilliseconds}ms");
+
+        sw.Restart();
+        SetupLightShadowManager();
+        Debug.Log($"Light Shadow Manager Setup: {sw.ElapsedMilliseconds}ms");
+
         totalStopwatch.Stop();
         Debug.Log($"=== Total Generation Time: {totalStopwatch.ElapsedMilliseconds}ms ===");
     }
@@ -204,19 +280,19 @@ public class DungeonGenerator : MonoBehaviour
         if (verboseDebugLogs)
         {
             Debug.Log($"=== InitializePrefabs START ===");
-            Debug.Log($"useMultiplePrefabs: {useMultiplePrefabs}");
+            Debug.Log($"enableRandomPrefabs: {enableRandomPrefabs}");
         }
 
-        if (!useMultiplePrefabs)
+        if (!enableRandomPrefabs)
         {
             if (verboseDebugLogs)
             {
-                Debug.Log("Using single prefabs (legacy mode)");
+                Debug.Log("Using single prefabs only (random prefabs disabled)");
             }
             return;
         }
 
-        Debug.Log("Loading multiple prefabs from Resources...");
+        Debug.Log("Loading random prefabs from Resources...");
         if (verboseDebugLogs)
         {
             Debug.Log($"Paths - RoomFloor: '{roomFloorPrefabPath}', RoomWall: '{roomWallPrefabPath}', RoomCeiling: '{roomCeilingPrefabPath}', PathFloor: '{pathFloorPrefabPath}', PathWall: '{pathWallPrefabPath}', PathCeiling: '{pathCeilingPrefabPath}'");
@@ -316,68 +392,95 @@ public class DungeonGenerator : MonoBehaviour
         }
     }
 
-    private GameObject GetRandomPrefab(GameObject[] prefabArray, GameObject fallbackPrefab, string prefabType)
+    private GameObject GetPrefabWithRandomChance(GameObject[] prefabArray, GameObject basePrefab, float randomChance, string prefabType)
     {
         // 詳細なデバッグ情報（verboseDebugLogsがtrueの場合のみ）
         if (verboseDebugLogs)
         {
-            Debug.Log($"GetRandomPrefab called for {prefabType}:");
-            Debug.Log($"  useMultiplePrefabs: {useMultiplePrefabs}");
+            Debug.Log($"GetPrefabWithRandomChance called for {prefabType}:");
+            Debug.Log($"  enableRandomPrefabs: {enableRandomPrefabs}");
+            Debug.Log($"  randomChance: {randomChance:F2}");
             Debug.Log($"  prefabArray: {(prefabArray == null ? "null" : $"Length={prefabArray.Length}")}");
-            Debug.Log($"  fallbackPrefab: {(fallbackPrefab == null ? "null" : fallbackPrefab.name)}");
+            Debug.Log($"  basePrefab: {(basePrefab == null ? "null" : basePrefab.name)}");
         }
 
-        if (useMultiplePrefabs && prefabArray != null && prefabArray.Length > 0)
+        // 基本プレハブが設定されていない場合はエラー
+        if (basePrefab == null)
         {
+            Debug.LogError($"No base {prefabType} prefab available! Please set the base prefab in inspector.");
+            return null;
+        }
+
+        // ランダムプレハブシステムが無効、または確率が0の場合は基本プレハブを返す
+        if (!enableRandomPrefabs || randomChance <= 0f)
+        {
+            if (verboseDebugLogs || debugPrefabSelection)
+            {
+                Debug.Log($"✓ BASE PREFAB: Using base {prefabType}: {basePrefab.name} (random disabled or chance=0)");
+            }
+            return basePrefab;
+        }
+
+        // ランダムプレハブ配列が利用できない場合は基本プレハブを返す
+        if (prefabArray == null || prefabArray.Length == 0)
+        {
+            if (verboseDebugLogs || debugPrefabSelection)
+            {
+                Debug.Log($"✓ BASE PREFAB: Using base {prefabType}: {basePrefab.name} (no random prefabs available)");
+            }
+            return basePrefab;
+        }
+
+        // 確率判定
+        float randomValue = (float)rng.NextDouble();
+        bool useRandomPrefab = randomValue < randomChance;
+
+        if (useRandomPrefab)
+        {
+            // ランダムプレハブを選択
             int randomIndex = rng.Next(prefabArray.Length);
             GameObject selectedPrefab = prefabArray[randomIndex];
 
             if (verboseDebugLogs || debugPrefabSelection)
             {
-                Debug.Log($"✓ MULTIPLE MODE: Selected {prefabType}: {selectedPrefab.name} (index {randomIndex} from {prefabArray.Length} options)");
+                Debug.Log($"✓ RANDOM PREFAB: Selected {prefabType}: {selectedPrefab.name} (index {randomIndex} from {prefabArray.Length} options, roll: {randomValue:F3} < {randomChance:F2})");
             }
             return selectedPrefab;
         }
-
-        if (fallbackPrefab == null)
-        {
-            Debug.LogError($"No {prefabType} prefab available! Please set single prefab or configure multiple prefabs path.");
-        }
         else
         {
+            // 基本プレハブを使用
             if (verboseDebugLogs || debugPrefabSelection)
             {
-                Debug.Log($"✓ SINGLE MODE: Using single {prefabType}: {fallbackPrefab.name}");
-                Debug.Log($"  Reason: {(!useMultiplePrefabs ? "useMultiplePrefabs=false" : prefabArray == null ? "prefabArray is null" : "prefabArray is empty")}");
+                Debug.Log($"✓ BASE PREFAB: Using base {prefabType}: {basePrefab.name} (roll: {randomValue:F3} >= {randomChance:F2})");
             }
+            return basePrefab;
         }
-
-        return fallbackPrefab;
     }
 
-    [ContextMenu("Reload Multiple Prefabs")]
-    public void ReloadMultiplePrefabs()
+    [ContextMenu("Reload Random Prefabs")]
+    public void ReloadRandomPrefabs()
     {
-        if (!useMultiplePrefabs)
+        if (!enableRandomPrefabs)
         {
-            Debug.Log("Multiple prefabs mode is disabled.");
+            Debug.Log("Random prefabs system is disabled.");
             return;
         }
 
-        Debug.Log("=== Reloading Multiple Prefabs ===");
+        Debug.Log("=== Reloading Random Prefabs ===");
         InitializePrefabs();
     }
 
     [ContextMenu("List Loaded Prefabs")]
     public void ListLoadedPrefabs()
     {
-        if (!useMultiplePrefabs)
+        if (!enableRandomPrefabs)
         {
-            Debug.Log("Multiple prefabs mode is disabled.");
+            Debug.Log("Random prefabs system is disabled.");
             return;
         }
 
-        Debug.Log("=== Currently Loaded Prefabs ===");
+        Debug.Log("=== Currently Loaded Random Prefabs ===");
         LogPrefabArray("Room Floor", roomFloorPrefabs);
         LogPrefabArray("Room Wall", roomWallPrefabs);
         LogPrefabArray("Room Ceiling", roomCeilingPrefabs);
@@ -386,15 +489,15 @@ public class DungeonGenerator : MonoBehaviour
         LogPrefabArray("Path Ceiling", pathCeilingPrefabs);
     }
 
-    [ContextMenu("Test Multiple Prefabs")]
-    public void TestMultiplePrefabs()
+    [ContextMenu("Test Random Prefabs")]
+    public void TestRandomPrefabs()
     {
-        Debug.Log("=== Testing Multiple Prefabs System ===");
-        Debug.Log($"useMultiplePrefabs: {useMultiplePrefabs}");
+        Debug.Log("=== Testing Random Prefabs System ===");
+        Debug.Log($"enableRandomPrefabs: {enableRandomPrefabs}");
 
-        if (!useMultiplePrefabs)
+        if (!enableRandomPrefabs)
         {
-            Debug.LogWarning("useMultiplePrefabs is FALSE. Enable it to use multiple prefabs.");
+            Debug.LogWarning("enableRandomPrefabs is FALSE. Enable it to use random prefabs.");
             return;
         }
 
@@ -406,10 +509,10 @@ public class DungeonGenerator : MonoBehaviour
         for (int i = 0; i < 3; i++)
         {
             Debug.Log($"Test {i + 1}:");
-            GameObject roomFloor = GetRandomPrefab(roomFloorPrefabs, roomFloorPrefab, "Room Floor");
-            GameObject pathFloor = GetRandomPrefab(pathFloorPrefabs, pathFloorPrefab, "Path Floor");
-            GameObject roomCeiling = GetRandomPrefab(roomCeilingPrefabs, roomCeilingPrefab, "Room Ceiling");
-            GameObject pathCeiling = GetRandomPrefab(pathCeilingPrefabs, pathCeilingPrefab, "Path Ceiling");
+            GameObject roomFloor = GetPrefabWithRandomChance(roomFloorPrefabs, roomFloorPrefab, roomFloorRandomChance, "Room Floor");
+            GameObject pathFloor = GetPrefabWithRandomChance(pathFloorPrefabs, pathFloorPrefab, pathFloorRandomChance, "Path Floor");
+            GameObject roomCeiling = GetPrefabWithRandomChance(roomCeilingPrefabs, roomCeilingPrefab, roomCeilingRandomChance, "Room Ceiling");
+            GameObject pathCeiling = GetPrefabWithRandomChance(pathCeilingPrefabs, pathCeilingPrefab, pathCeilingRandomChance, "Path Ceiling");
             Debug.Log($"  Room Floor: {(roomFloor != null ? roomFloor.name : "null")}");
             Debug.Log($"  Path Floor: {(pathFloor != null ? pathFloor.name : "null")}");
             Debug.Log($"  Room Ceiling: {(roomCeiling != null ? roomCeiling.name : "null")}");
@@ -453,6 +556,23 @@ public class DungeonGenerator : MonoBehaviour
         rooms.Clear();
         roomCenters.Clear();
         isolatedPaths.Clear();
+
+        // Clear player reference
+        if (currentPlayer != null)
+        {
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+                DestroyImmediate(currentPlayer);
+            else
+                Destroy(currentPlayer);
+#else
+            Destroy(currentPlayer);
+#endif
+            currentPlayer = null;
+        }
+
+        // Clear shadow manager reference
+        shadowManager = null;
     }
     #endregion
 
@@ -762,14 +882,25 @@ public class DungeonGenerator : MonoBehaviour
 
                 if (t == CellType.RoomFloor)
                 {
-                    prefabToUse = GetRandomPrefab(roomFloorPrefabs, roomFloorPrefab, "Room Floor");
-                    yOffset = roomFloorYOffset;
-                    tag = "Room";
+                    tag = GetRoomTag(x, y);
+
+                    // GoalRoom専用Prefabの使用判定
+                    if (tag == "GoalRoom" && goalRoomFloorPrefab != null)
+                    {
+                        prefabToUse = goalRoomFloorPrefab;
+                        yOffset = goalRoomFloorYOffset;
+                    }
+                    else
+                    {
+                        prefabToUse = GetPrefabWithRandomChance(roomFloorPrefabs, roomFloorPrefab, roomFloorRandomChance, "Room Floor");
+                        yOffset = roomFloorYOffset;
+                    }
+
                     rotation = GetRandomFloorRotation(rotateRoomFloors);
                 }
                 else // PathFloor
                 {
-                    prefabToUse = GetRandomPrefab(pathFloorPrefabs, pathFloorPrefab, "Path Floor");
+                    prefabToUse = GetPrefabWithRandomChance(pathFloorPrefabs, pathFloorPrefab, pathFloorRandomChance, "Path Floor");
                     yOffset = pathFloorYOffset;
                     tag = "Path";
                     rotation = GetRandomFloorRotation(rotatePathFloors);
@@ -779,6 +910,18 @@ public class DungeonGenerator : MonoBehaviour
                                      pos + Vector3.up * yOffset,
                                      rotation, transform);
                 go.tag = tag;
+
+                // GoalRoom床タイルに特別な名前を付与
+                if (tag == "GoalRoom")
+                {
+                    go.name = $"GoalFloor_{x}_{y}";
+                }
+
+                // ライトの影を無効化
+                if (disableLightShadowsOnGeneration)
+                {
+                    DisableLightShadowsInPrefab(go);
+                }
             }
     }
 
@@ -827,13 +970,13 @@ public class DungeonGenerator : MonoBehaviour
 
                 if (t == CellType.RoomFloor)
                 {
-                    prefabToUse = GetRandomPrefab(roomCeilingPrefabs, roomCeilingPrefab, "Room Ceiling");
+                    prefabToUse = GetPrefabWithRandomChance(roomCeilingPrefabs, roomCeilingPrefab, roomCeilingRandomChance, "Room Ceiling");
                     yOffset = roomCeilingYOffset;
                     rotation = GetRandomCeilingRotation(rotateRoomCeilings);
                 }
                 else // PathFloor
                 {
-                    prefabToUse = GetRandomPrefab(pathCeilingPrefabs, pathCeilingPrefab, "Path Ceiling");
+                    prefabToUse = GetPrefabWithRandomChance(pathCeilingPrefabs, pathCeilingPrefab, pathCeilingRandomChance, "Path Ceiling");
                     yOffset = pathCeilingYOffset;
                     rotation = GetRandomCeilingRotation(rotatePathCeilings);
                 }
@@ -853,6 +996,12 @@ public class DungeonGenerator : MonoBehaviour
                                      pos + Vector3.up * yOffset,
                                      rotation, transform);
                 go.tag = "Ceiling";
+
+                // ライトの影を無効化
+                if (disableLightShadowsOnGeneration)
+                {
+                    DisableLightShadowsInPrefab(go);
+                }
             }
     }
 
@@ -868,8 +1017,8 @@ public class DungeonGenerator : MonoBehaviour
 
                 // 使用するプレハブと設定を決定
                 GameObject wallPrefab = isRoom ?
-                    GetRandomPrefab(roomWallPrefabs, roomWallPrefab, "Room Wall") :
-                    GetRandomPrefab(pathWallPrefabs, pathWallPrefab, "Path Wall");
+                    GetPrefabWithRandomChance(roomWallPrefabs, roomWallPrefab, roomWallRandomChance, "Room Wall") :
+                    GetPrefabWithRandomChance(pathWallPrefabs, pathWallPrefab, pathWallRandomChance, "Path Wall");
                 float wallHalfT = isRoom ? roomWallHalfT : pathWallHalfT;
                 float wallYOffset = isRoom ? roomWallYOffset : pathWallYOffset;
                 float thicknessDiff = isRoom ? roomThicknessDiff : pathThicknessDiff;
@@ -898,9 +1047,94 @@ public class DungeonGenerator : MonoBehaviour
                 ? new Vector3(sign * (halfCell + halfT + thickDiff), 0, 0)
                 : new Vector3(0, 0, sign * (halfCell + halfT + thickDiff));
 
-            Instantiate(prefab,
-                        c + offset + Vector3.up * yOffset,
-                        rot, transform);
+            var wallGO = Instantiate(prefab,
+                                     c + offset + Vector3.up * yOffset,
+                                     rot, transform);
+
+            // ライトの影を無効化
+            if (disableLightShadowsOnGeneration)
+            {
+                DisableLightShadowsInPrefab(wallGO);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Prefab内のライトの影を無効化
+    /// </summary>
+    /// <param name="prefabInstance">生成されたPrefabインスタンス</param>
+    private void DisableLightShadowsInPrefab(GameObject prefabInstance)
+    {
+        if (prefabInstance == null) return;
+
+        Light[] lights = prefabInstance.GetComponentsInChildren<Light>();
+        foreach (Light light in lights)
+        {
+            if (light.shadows != LightShadows.None)
+            {
+                light.shadows = LightShadows.None;
+                if (verboseDebugLogs)
+                {
+                    Debug.Log($"[DungeonGenerator] Disabled shadow on light '{light.name}' in prefab '{prefabInstance.name}'");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// ライト影管理システムのセットアップ
+    /// </summary>
+    private void SetupLightShadowManager()
+    {
+        if (!autoCreateShadowManager)
+        {
+            Debug.Log("[DungeonGenerator] Auto-create shadow manager is disabled, skipping setup.");
+            return;
+        }
+
+        // 既存のDynamicLightShadowManagerを探す
+        shadowManager = FindFirstObjectByType<DynamicLightShadowManager>();
+
+        if (shadowManager == null)
+        {
+            // DynamicLightShadowManagerが存在しない場合は作成
+            GameObject shadowManagerGO = new GameObject("DynamicLightShadowManager");
+            shadowManager = shadowManagerGO.AddComponent<DynamicLightShadowManager>();
+
+            if (verboseDebugLogs)
+            {
+                Debug.Log("[DungeonGenerator] Created new DynamicLightShadowManager");
+            }
+        }
+        else
+        {
+            if (verboseDebugLogs)
+            {
+                Debug.Log("[DungeonGenerator] Using existing DynamicLightShadowManager");
+            }
+        }
+
+        // シャドウマネージャーの設定を適用
+        if (shadowManager != null)
+        {
+            // リフレクションを使ってInspectorからアクセスできない内部フィールドを設定
+            var shadowManagerType = typeof(DynamicLightShadowManager);
+
+            // デバッグログ設定
+            var enableDebugLogsField = shadowManagerType.GetField("enableDebugLogs",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (enableDebugLogsField != null)
+            {
+                enableDebugLogsField.SetValue(shadowManager, enableShadowManagerDebug);
+            }
+
+            // ライトリストを手動で更新
+            shadowManager.RefreshLightList();
+
+            if (verboseDebugLogs)
+            {
+                Debug.Log("[DungeonGenerator] Configured DynamicLightShadowManager settings");
+            }
         }
     }
     #endregion
@@ -1469,6 +1703,417 @@ public class DungeonGenerator : MonoBehaviour
     private bool IsRoomFloor(int x, int y)
 => IsInside(x, y) && grid[x, y] == CellType.RoomFloor;
 
+    /// <summary>
+    /// スタートルームとゴールルームを選択する
+    /// </summary>
+    private void SelectStartAndGoalRooms()
+    {
+        hasValidStartGoal = false;
+
+        if (!enableGameSequence || rooms.Count < 2)
+        {
+            Debug.Log("Game sequence disabled or insufficient rooms for start/goal selection.");
+            return;
+        }
+
+        float maxDistance = 0f;
+        RectInt bestStart = rooms[0];
+        RectInt bestGoal = rooms[1];
+
+        // 全ての部屋のペアを比較して最も離れたペアを選択
+        for (int i = 0; i < rooms.Count; i++)
+        {
+            for (int j = i + 1; j < rooms.Count; j++)
+            {
+                RectInt roomA = rooms[i];
+                RectInt roomB = rooms[j];
+
+                // 部屋の中心間の距離を計算
+                Vector2 centerA = new Vector2(roomA.center.x, roomA.center.y);
+                Vector2 centerB = new Vector2(roomB.center.x, roomB.center.y);
+                float distance = Vector2.Distance(centerA, centerB);
+
+                if (distance > maxDistance)
+                {
+                    maxDistance = distance;
+                    bestStart = roomA;
+                    bestGoal = roomB;
+                }
+            }
+        }
+
+        // 最小距離チェック
+        if (maxDistance >= minRoomDistance)
+        {
+            startRoom = bestStart;
+            goalRoom = bestGoal;
+            hasValidStartGoal = true;
+
+            Debug.Log($"Start Room selected: {startRoom.center} (size: {startRoom.size})");
+            Debug.Log($"Goal Room selected: {goalRoom.center} (size: {goalRoom.size})");
+            Debug.Log($"Distance between Start and Goal: {maxDistance:F2}");
+        }
+        else
+        {
+            Debug.LogWarning($"Unable to find Start/Goal rooms with minimum distance {minRoomDistance}. Max found: {maxDistance:F2}");
+        }
+    }
+
+    /// <summary>
+    /// 指定座標の部屋タイプに応じたタグを取得
+    /// </summary>
+    private string GetRoomTag(int x, int y)
+    {
+        if (!hasValidStartGoal || !enableGameSequence)
+            return "Room";
+
+        // StartRoomチェック
+        if (IsPointInRoom(x, y, startRoom))
+            return "StartRoom";
+
+        // GoalRoomチェック
+        if (IsPointInRoom(x, y, goalRoom))
+            return "GoalRoom";
+
+        return "Room";
+    }
+
+    /// <summary>
+    /// 指定座標が指定部屋内にあるかチェック
+    /// </summary>
+    private bool IsPointInRoom(int x, int y, RectInt room)
+    {
+        return x >= room.x && x < room.xMax && y >= room.y && y < room.yMax;
+    }
+
+    /// <summary>
+    /// StartRoomにプレイヤーを生成
+    /// </summary>
+    private void SpawnPlayerInStartRoom()
+    {
+        if (!enablePlayerSpawning)
+        {
+            Debug.Log("Player spawning is disabled.");
+            return;
+        }
+
+        if (playerPrefab == null)
+        {
+            Debug.LogWarning("Player prefab is not assigned! Please set the player prefab in the inspector.");
+            return;
+        }
+
+        Vector3 spawnPosition;
+
+        // StartRoomタグのオブジェクトを優先的に探す
+        if (hasValidStartGoal && enableGameSequence)
+        {
+            GameObject[] startRoomObjects = GameObject.FindGameObjectsWithTag("StartRoom");
+            if (startRoomObjects.Length > 0)
+            {
+                // StartRoomタグの最初のオブジェクトの位置を使用
+                spawnPosition = startRoomObjects[0].transform.position;
+                spawnPosition.y = playerSpawnHeight;
+                Debug.Log($"Player spawned at StartRoom: {spawnPosition}");
+            }
+            else
+            {
+                Debug.LogWarning("StartRoom tag objects not found! Using fallback spawn position.");
+                spawnPosition = GetFallbackSpawnPosition();
+            }
+        }
+        else
+        {
+            Debug.Log("Game sequence disabled or no valid start/goal rooms. Using fallback spawn position.");
+            spawnPosition = GetFallbackSpawnPosition();
+        }
+
+        // プレイヤーを生成
+        currentPlayer = Instantiate(playerPrefab, spawnPosition, Quaternion.identity);
+
+        // プレイヤーにPlayerタグを設定（GoalRoomトリガー検知用）
+        if (!currentPlayer.CompareTag("Player"))
+        {
+            currentPlayer.tag = "Player";
+            Debug.Log("Player tag automatically assigned to spawned player.");
+        }
+
+        // プレイヤーにトリガー検知用のColliderを追加
+        EnsurePlayerTriggerCollider(currentPlayer);
+
+        Debug.Log($"Player spawned at: {spawnPosition}");
+    }
+
+    /// <summary>
+    /// フォールバック用のスポーン位置を取得（最初の部屋の中央）
+    /// </summary>
+    private Vector3 GetFallbackSpawnPosition()
+    {
+        if (rooms.Count > 0)
+        {
+            RectInt firstRoom = rooms[0];
+            Vector3 fallbackPosition = new Vector3(
+                firstRoom.center.x * cellSize,
+                playerSpawnHeight,
+                firstRoom.center.y * cellSize
+            );
+            Debug.Log($"Using fallback spawn position: {fallbackPosition}");
+            return fallbackPosition;
+        }
+        else
+        {
+            Debug.LogWarning("No rooms available for spawn! Using origin.");
+            return new Vector3(0, playerSpawnHeight, 0);
+        }
+    }
+
+    /// <summary>
+    /// GoalRoomタグのオブジェクトにトリガーコンポーネントを設定
+    /// </summary>
+    private void SetupGoalRoomTriggers()
+    {
+        if (!enableGameSequence || !hasValidStartGoal)
+        {
+            Debug.Log("Game sequence disabled or no valid goal room. Skipping trigger setup.");
+            return;
+        }
+
+        // GoalRoomタグのオブジェクトを検索
+        GameObject[] goalRoomObjects = GameObject.FindGameObjectsWithTag("GoalRoom");
+
+        if (goalRoomObjects.Length == 0)
+        {
+            Debug.LogWarning("No GoalRoom tagged objects found for trigger setup!");
+            return;
+        }
+
+        // GoalRoom専用Prefabのオブジェクトのみを対象とする
+        var goalFloorObjects = new List<GameObject>();
+        foreach (GameObject obj in goalRoomObjects)
+        {
+            // GoalRoom専用Prefabを使用している場合（名前がGoalFloor_で始まる）
+            if (goalRoomFloorPrefab != null && obj.name.StartsWith("GoalFloor_"))
+            {
+                goalFloorObjects.Add(obj);
+            }
+        }
+
+        if (goalFloorObjects.Count == 0)
+        {
+            Debug.LogWarning("No GoalRoom floor prefab objects found! Make sure goalRoomFloorPrefab is assigned and generated properly.");
+            return;
+        }
+
+        int triggersAdded = 0;
+
+        foreach (GameObject goalRoom in goalFloorObjects)
+        {
+            // 既にGoalRoomTriggerがアタッチされているかチェック
+            var existingTrigger = goalRoom.GetComponent<DungeonGen.Generation.GoalRoomTrigger>();
+            if (existingTrigger != null)
+            {
+                // 既存のトリガーをリセット
+                existingTrigger.ResetTrigger();
+                continue;
+            }
+
+            // BoxColliderを追加または取得
+            BoxCollider boxCollider = goalRoom.GetComponent<BoxCollider>();
+            if (boxCollider == null)
+            {
+                boxCollider = goalRoom.AddComponent<BoxCollider>();
+
+                // トリガー用のサイズを設定（床タイルのサイズに合わせる）
+                boxCollider.size = new Vector3(cellSize * 0.8f, cellSize * 0.5f, cellSize * 0.8f);
+                boxCollider.center = new Vector3(0, cellSize * 0.25f, 0);
+            }
+
+            // BoxColliderをトリガーに設定
+            boxCollider.isTrigger = true;
+
+            // GoalRoomTriggerコンポーネントを追加
+            var trigger = goalRoom.AddComponent<DungeonGen.Generation.GoalRoomTrigger>();
+            trigger.SetPlayerTag("Player");
+            trigger.SetDebugMode(true); // デバッグモードを有効に
+
+            triggersAdded++;
+
+            Debug.Log($"Goal room trigger added to: {goalRoom.name} at position {goalRoom.transform.position}");
+        }
+
+        Debug.Log($"Goal room trigger setup completed. {triggersAdded} triggers added/reset.");
+    }
+
+    /// <summary>
+    /// プレイヤーにトリガー検知用のColliderを確保
+    /// </summary>
+    private void EnsurePlayerTriggerCollider(GameObject player)
+    {
+        if (player == null) return;
+
+        Debug.Log($"[DungeonGenerator] Checking player colliders for: {player.name}");
+
+        // 既存のColliderを確認
+        Collider[] colliders = player.GetComponents<Collider>();
+        bool hasTriggerCollider = false;
+        bool hasNonTriggerCollider = false;
+
+        foreach (Collider col in colliders)
+        {
+            Debug.Log($"  Found collider: {col.GetType().Name}, IsTrigger: {col.isTrigger}");
+            if (col.isTrigger)
+                hasTriggerCollider = true;
+            else
+                hasNonTriggerCollider = true;
+        }
+
+        // CharacterControllerをチェック
+        CharacterController characterController = player.GetComponent<CharacterController>();
+        if (characterController != null)
+        {
+            Debug.Log("  Found CharacterController");
+            hasNonTriggerCollider = true;
+        }
+
+        // トリガー用のColliderがない場合は追加
+        if (!hasTriggerCollider)
+        {
+            CapsuleCollider triggerCollider = player.AddComponent<CapsuleCollider>();
+            triggerCollider.isTrigger = true;
+            triggerCollider.radius = 0.5f;
+            triggerCollider.height = 2.0f;
+            triggerCollider.center = new Vector3(0, 1.0f, 0);
+
+            Debug.Log($"[DungeonGenerator] Added trigger CapsuleCollider to player: radius={triggerCollider.radius}, height={triggerCollider.height}");
+        }
+        else
+        {
+            Debug.Log("[DungeonGenerator] Player already has trigger collider");
+        }
+
+        Debug.Log($"[DungeonGenerator] Player collider setup completed. Tag: {player.tag}");
+    }
+
+    #endregion
+
+    /*==================================================================*/
+    #region Light Shadow Debug Methods
+    /*==================================================================*/
+    [ContextMenu("🔧 Setup Light Shadow Manager")]
+    public void SetupLightShadowManagerManual()
+    {
+        SetupLightShadowManager();
+        Debug.Log("[DungeonGenerator] Light shadow manager setup completed manually.");
+    }
+
+    [ContextMenu("💡 Show Light Shadow Status")]
+    public void ShowLightShadowStatus()
+    {
+        Debug.Log("=== LIGHT SHADOW STATUS ===");
+        Debug.Log($"Disable Light Shadows on Generation: {disableLightShadowsOnGeneration}");
+        Debug.Log($"Auto Create Shadow Manager: {autoCreateShadowManager}");
+        Debug.Log($"Shadow Manager Debug: {enableShadowManagerDebug}");
+
+        Light[] allLights = FindObjectsByType<Light>(FindObjectsSortMode.None);
+        int shadowLights = 0;
+        int noShadowLights = 0;
+
+        foreach (Light light in allLights)
+        {
+            if (light.shadows != LightShadows.None)
+                shadowLights++;
+            else
+                noShadowLights++;
+        }
+
+        Debug.Log($"Current Lights: {allLights.Length} total, {shadowLights} with shadows, {noShadowLights} without shadows");
+
+        if (shadowManager != null)
+        {
+            shadowManager.ShowStatus();
+        }
+        else
+        {
+            Debug.Log("No DynamicLightShadowManager found");
+        }
+    }
+
+    [ContextMenu("❌ Force Disable All Light Shadows")]
+    public void ForceDisableAllLightShadows()
+    {
+        Light[] allLights = FindObjectsByType<Light>(FindObjectsSortMode.None);
+        int disabledCount = 0;
+
+        foreach (Light light in allLights)
+        {
+            if (light.shadows != LightShadows.None)
+            {
+                light.shadows = LightShadows.None;
+                disabledCount++;
+            }
+        }
+
+        Debug.Log($"[DungeonGenerator] Forcibly disabled shadows on {disabledCount} lights");
+    }
+    #endregion
+
+    /*==================================================================*/
+    #region Goal Room Debug Methods
+    /*==================================================================*/
+    [ContextMenu("Show Goal Room Status")]
+    public void ShowGoalRoomStatus()
+    {
+        Debug.Log("=== GOAL ROOM STATUS ===");
+        Debug.Log($"Enable Game Sequence: {enableGameSequence}");
+        Debug.Log($"Has Valid Start/Goal: {hasValidStartGoal}");
+        Debug.Log($"Goal Room Floor Prefab: {(goalRoomFloorPrefab != null ? goalRoomFloorPrefab.name : "Not assigned")}");
+        Debug.Log($"Goal Room Floor Y Offset: {goalRoomFloorYOffset}");
+
+        if (hasValidStartGoal)
+        {
+            Debug.Log($"Start Room: {startRoom}");
+            Debug.Log($"Goal Room: {goalRoom}");
+        }
+
+        // GoalFloor Prefabの検索
+        GameObject[] goalRoomObjects = GameObject.FindGameObjectsWithTag("GoalRoom");
+        var goalFloorPrefabs = new List<GameObject>();
+
+        foreach (GameObject obj in goalRoomObjects)
+        {
+            if (obj.name.StartsWith("GoalFloor_"))
+            {
+                goalFloorPrefabs.Add(obj);
+            }
+        }
+
+        Debug.Log($"Total GoalRoom objects: {goalRoomObjects.Length}");
+        Debug.Log($"GoalFloor prefab instances: {goalFloorPrefabs.Count}");
+
+        // GoalFloor Prefabの詳細状態
+        foreach (GameObject goalFloor in goalFloorPrefabs)
+        {
+            var trigger = goalFloor.GetComponent<GoalRoomTrigger>();
+            var boxCollider = goalFloor.GetComponent<BoxCollider>();
+
+            Debug.Log($"  {goalFloor.name}:");
+            Debug.Log($"    Position: {goalFloor.transform.position}");
+            Debug.Log($"    Has GoalRoomTrigger: {trigger != null}");
+            Debug.Log($"    Has BoxCollider: {boxCollider != null}");
+            if (boxCollider != null)
+            {
+                Debug.Log($"    BoxCollider IsTrigger: {boxCollider.isTrigger}");
+                Debug.Log($"    BoxCollider Size: {boxCollider.size}");
+            }
+        }
+    }
+
+    [ContextMenu("Setup Goal Room Triggers Manually")]
+    public void SetupGoalRoomTriggersManual()
+    {
+        SetupGoalRoomTriggers();
+        Debug.Log("[DungeonGenerator] Goal room trigger setup completed manually.");
+    }
     #endregion
 }
 

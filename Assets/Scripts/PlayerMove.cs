@@ -3,6 +3,7 @@
 // 必要に応じて Animator のパラメータ名 "Spead" を変更してください
 
 using UnityEngine;
+using System;
 
 [RequireComponent(typeof(Rigidbody), typeof(Animator))]
 public class PlayerMovement : MonoBehaviour
@@ -20,6 +21,24 @@ public class PlayerMovement : MonoBehaviour
     public float stepHeight = 0.3f;        // 乗り越えられる段差の高さ
     public float stepSearchDistance = 0.5f; // 段差検出の距離
     public LayerMask groundLayer = 1;      // 地面のレイヤー
+
+    [Header("PlayerMovement Debug Control")]
+    [Space(10)]
+    [Tooltip("【マスタースイッチ】PlayerMovementの全ログを一括制御")]
+    public bool enablePlayerMovementLogs = false;
+
+    [Space(5)]
+    [Header("詳細デバッグ設定")]
+    [Tooltip("入力とベロシティの情報を表示")]
+    public bool showInputVelocityDebug = false;
+    [Tooltip("ターゲットと最終ベロシティを表示")]
+    public bool showTargetVelocityDebug = false;
+    [Tooltip("段差乗り越え情報を表示")]
+    public bool showStepOverDebug = false;
+    [Tooltip("カメラ連携情報を表示")]
+    public bool showCameraDebug = false;
+    [Tooltip("グラウンドチェック情報を表示")]
+    public bool showGroundCheckDebug = false;
 
     private Rigidbody rb;
     private Animator animator;
@@ -56,6 +75,9 @@ public class PlayerMovement : MonoBehaviour
 
         animator = GetComponent<Animator>();
         cam = FindFirstObjectByType<PlayerCameraController>();
+
+        // 初期モードの設定とヒント表示
+        SetInitialMode();
     }
 
     void CreatePlayerPhysicsMaterial()
@@ -77,7 +99,14 @@ public class PlayerMovement : MonoBehaviour
     // 段差乗り越え判定
     bool CanStepOver(Vector3 moveDirection)
     {
-        if (capsuleCollider == null) return false;
+        if (capsuleCollider == null)
+        {
+            if (enablePlayerMovementLogs && showStepOverDebug)
+            {
+                Debug.LogWarning("[PlayerMovement] CanStepOver: CapsuleCollider is null");
+            }
+            return false;
+        }
 
         float radius = capsuleCollider.radius;
         float height = capsuleCollider.height;
@@ -89,15 +118,35 @@ public class PlayerMovement : MonoBehaviour
         if (Physics.Raycast(checkPos + Vector3.up * stepHeight, Vector3.down, out hit, stepHeight * 2f, groundLayer))
         {
             float stepHeightFound = hit.point.y - bottom.y;
-            return stepHeightFound > 0.1f && stepHeightFound <= stepHeight;
+            bool canStep = stepHeightFound > 0.1f && stepHeightFound <= stepHeight;
+
+            if (enablePlayerMovementLogs && showStepOverDebug)
+            {
+                Debug.Log($"[PlayerMovement] Step check - Height found: {stepHeightFound:F2}, Can step: {canStep}");
+            }
+
+            return canStep;
         }
+
+        if (enablePlayerMovementLogs && showStepOverDebug)
+        {
+            Debug.Log("[PlayerMovement] No step detected in movement direction");
+        }
+
         return false;
     }
 
     // 段差乗り越え処理
     void StepOver(Vector3 moveDirection)
     {
-        if (capsuleCollider == null) return;
+        if (capsuleCollider == null)
+        {
+            if (enablePlayerMovementLogs && showStepOverDebug)
+            {
+                Debug.LogWarning("[PlayerMovement] StepOver: CapsuleCollider is null");
+            }
+            return;
+        }
 
         float radius = capsuleCollider.radius;
         float height = capsuleCollider.height;
@@ -110,10 +159,17 @@ public class PlayerMovement : MonoBehaviour
             float targetY = hit.point.y + (height * 0.5f - radius);
             if (targetY > transform.position.y)
             {
+                Vector3 oldPos = transform.position;
+
                 // 段差の上に移動
                 Vector3 newPos = transform.position;
                 newPos.y = Mathf.Lerp(newPos.y, targetY, Time.fixedDeltaTime * 10f);
                 transform.position = newPos;
+
+                if (enablePlayerMovementLogs && showStepOverDebug)
+                {
+                    Debug.Log($"[PlayerMovement] Step over executed - From Y: {oldPos.y:F2} to Y: {newPos.y:F2}, Target Y: {targetY:F2}");
+                }
             }
         }
     }
@@ -140,18 +196,32 @@ public class PlayerMovement : MonoBehaviour
         {
             rb.AddForce(Vector3.up * jumpForce, ForceMode.Impulse);
             animator.SetTrigger(AnimJump);
+
+            if (enablePlayerMovementLogs && showInputVelocityDebug)
+            {
+                Debug.Log($"[PlayerMovement] Jump executed with force: {jumpForce}");
+            }
         }
 
         // ===== Animator パラメータ更新 =====
         float targetSpeed = (isRunning ? walkSpeed * runSpeedMultiplier : walkSpeed) * inputDir.magnitude;
         float current = animator.GetFloat(AnimSpeed);
-        animator.SetFloat(AnimSpeed, Mathf.Lerp(current, targetSpeed, Time.deltaTime * 10f));
+        float newSpeed = Mathf.Lerp(current, targetSpeed, Time.deltaTime * 10f);
+        animator.SetFloat(AnimSpeed, newSpeed);
+
+        if (enablePlayerMovementLogs && showInputVelocityDebug && Mathf.Abs(newSpeed - current) > 0.01f)
+        {
+            Debug.Log($"[PlayerMovement] Animator speed updated: {current:F2} → {newSpeed:F2} (target: {targetSpeed:F2}, running: {isRunning})");
+        }
     }
 
     void FixedUpdate()
     {
         // デバッグ情報
-        Debug.Log($"Input: {inputDir}, Velocity: {rb.linearVelocity}");
+        if (enablePlayerMovementLogs && showInputVelocityDebug)
+        {
+            Debug.Log($"[PlayerMovement] Input: {inputDir}, Current Velocity: {rb.linearVelocity}");
+        }
 
         // ===== カメラ基準で方向ベクトルを算出 =====
         Vector3 move = Vector3.zero;
@@ -167,15 +237,28 @@ public class PlayerMovement : MonoBehaviour
                 forward.Normalize();
                 right.Normalize();
                 move = forward * inputDir.z + right * inputDir.x;
+
+                if (enablePlayerMovementLogs && showCameraDebug)
+                {
+                    Debug.Log($"[PlayerMovement] Camera Forward: {forward}, Right: {right}, Final Move: {move}");
+                }
             }
             else
             {
                 move = inputDir;
+                if (enablePlayerMovementLogs && showCameraDebug)
+                {
+                    Debug.Log($"[PlayerMovement] No camera found, using direct input: {move}");
+                }
             }
 
             // ===== 段差乗り越えチェック =====
             if (move.sqrMagnitude > 0.001f && CanStepOver(move))
             {
+                if (enablePlayerMovementLogs && showStepOverDebug)
+                {
+                    Debug.Log($"[PlayerMovement] Step over detected and executed in direction: {move}");
+                }
                 StepOver(move);
             }
 
@@ -216,24 +299,136 @@ public class PlayerMovement : MonoBehaviour
         // 角速度を常にリセット
         rb.angularVelocity = Vector3.zero;
 
-        Debug.Log($"Target: {targetVelocity}, Final: {rb.linearVelocity}");
-    }
-
-    #region Ground Check (簡易的)
-    private void OnCollisionStay(Collision collision)
-    {
-        if (collision.gameObject.CompareTag("Ground"))
+        if (enablePlayerMovementLogs && showTargetVelocityDebug)
         {
-            isGrounded = true;
+            Debug.Log($"[PlayerMovement] Target Velocity: {targetVelocity}, Final Velocity: {rb.linearVelocity}");
         }
     }
 
-    private void OnCollisionExit(Collision collision)
+
+
+
+
+
+    #region Debug Context Menu
+    /// <summary>
+    /// 現在の状態をコンソールに表示（デバッグ用）
+    /// </summary>
+    [ContextMenu("📊 Show Current Status")]
+    public void ShowCurrentStatus()
     {
-        if (collision.gameObject.CompareTag("Ground"))
+        Debug.Log("=== PlayerMovement Current Status ===");
+        Debug.Log($"Position: {transform.position}");
+        Debug.Log($"Rotation: {transform.rotation.eulerAngles}");
+        Debug.Log($"Velocity: {rb.linearVelocity}");
+        Debug.Log($"Input Direction: {inputDir}");
+        Debug.Log($"Is Running: {isRunning}");
+        Debug.Log($"Is Grounded: {isGrounded}");
+        Debug.Log($"Walk Speed: {walkSpeed}");
+        Debug.Log($"Run Speed Multiplier: {runSpeedMultiplier}");
+        Debug.Log($"Animator Speed: {animator.GetFloat(AnimSpeed)}");
+        Debug.Log($"Camera Reference: {(cam != null ? cam.name : "null")}");
+        Debug.Log("=====================================");
+    }
+
+    /// <summary>
+    /// デバッグ設定を切り替え（デバッグ用）
+    /// </summary>
+    [ContextMenu("🔄 Toggle PlayerMovement Logs")]
+    public void ToggleAllDebugLogs()
+    {
+        enablePlayerMovementLogs = !enablePlayerMovementLogs;
+        Debug.Log($"[PlayerMovement] Debug logs are now: {(enablePlayerMovementLogs ? "ENABLED" : "DISABLED")}");
+    }
+
+    /// <summary>
+    /// 全てのデバッグログを完全に無効化
+    /// </summary>
+    [ContextMenu("❌ Disable All PlayerMovement Logs")]
+    public void DisableAllDebugLogs()
+    {
+        enablePlayerMovementLogs = false;
+        showInputVelocityDebug = false;
+        showTargetVelocityDebug = false;
+        showStepOverDebug = false;
+        showCameraDebug = false;
+        showGroundCheckDebug = false;
+        Debug.Log("[PlayerMovement] All debug logs have been DISABLED");
+    }
+
+    /// <summary>
+    /// デバッグ無効化 + コンソールクリア
+    /// </summary>
+    [ContextMenu("🚫 Disable PlayerMovement Logs + Clear Console")]
+    public void DisableDebugAndClearConsole()
+    {
+        DisableAllDebugLogs();
+#if UNITY_EDITOR
+        var logEntries = System.Type.GetType("UnityEditor.LogEntries,UnityEditor.dll");
+        var clearMethod = logEntries.GetMethod("Clear", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+        clearMethod.Invoke(null, null);
+#endif
+        Debug.Log("🎯 [PlayerMovement] All logs disabled - Game Sequence logs now visible!");
+    }
+
+    /// <summary>
+    /// ゲームシークエンス表示モード（PlayerMovementログを無効化）
+    /// </summary>
+    [ContextMenu("🎯 Enable Game Sequence Mode")]
+    public void EnableGameSequenceMode()
+    {
+        enablePlayerMovementLogs = false;
+        showInputVelocityDebug = false;
+        showTargetVelocityDebug = false;
+        showStepOverDebug = false;
+        showCameraDebug = false;
+        showGroundCheckDebug = false;
+#if UNITY_EDITOR
+        var logEntries = System.Type.GetType("UnityEditor.LogEntries,UnityEditor.dll");
+        var clearMethod = logEntries.GetMethod("Clear", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+        clearMethod.Invoke(null, null);
+#endif
+        Debug.Log("🎯 [PlayerMovement] Game Sequence Mode ENABLED - Only game sequence logs will show!");
+    }
+
+    /// <summary>
+    /// デバッグモード（PlayerMovementログを有効化）
+    /// </summary>
+    [ContextMenu("🔧 Enable Debug Mode")]
+    public void EnableDebugMode()
+    {
+        enablePlayerMovementLogs = true;
+        showInputVelocityDebug = true;
+        showTargetVelocityDebug = true;
+        Debug.Log("🔧 [PlayerMovement] Debug Mode ENABLED - All PlayerMovement logs are now visible!");
+    }
+
+    /// <summary>
+    /// Awakeで自動的にGame Sequenceモードに設定
+    /// </summary>
+    private void SetInitialMode()
+    {
+        // デフォルトでゲームシークエンスモードに設定
+        if (enablePlayerMovementLogs)
         {
-            isGrounded = false;
+            Debug.Log("💡 [PlayerMovement] Use context menu '🎯 Enable Game Sequence Mode' to hide PlayerMovement logs and see game sequence logs clearly!");
         }
+    }
+
+    /// <summary>
+    /// 現在のデバッグ設定状態を表示
+    /// </summary>
+    [ContextMenu("⚙️ Show Debug Settings")]
+    public void ShowDebugSettings()
+    {
+        Debug.Log("=== PlayerMovement Debug Settings ===");
+        Debug.Log($"Enable PlayerMovement Logs: {enablePlayerMovementLogs}");
+        Debug.Log($"Show Input/Velocity Debug: {showInputVelocityDebug}");
+        Debug.Log($"Show Target Velocity Debug: {showTargetVelocityDebug}");
+        Debug.Log($"Show Step Over Debug: {showStepOverDebug}");
+        Debug.Log($"Show Camera Debug: {showCameraDebug}");
+        Debug.Log($"Show Ground Check Debug: {showGroundCheckDebug}");
+        Debug.Log("======================================");
     }
     #endregion
 }

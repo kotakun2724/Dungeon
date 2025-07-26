@@ -16,6 +16,7 @@ namespace DungeonGen.Generation
         [Header("Spawn Settings")]
         [SerializeField] private bool spawnInFirstRoom = true; // 最初の部屋に生成するか
         [SerializeField] private bool spawnInCenter = true; // 部屋の中央に生成するか
+        [SerializeField] private bool preferStartRoom = true; // StartRoomタグがあればそこに優先スポーン
 
         private GameObject currentPlayer; // 現在生成されているプレイヤー
 
@@ -59,6 +60,21 @@ namespace DungeonGen.Generation
         /// </summary>
         private Vector3 GetSpawnPosition(List<RectInt> rooms, CellMap map)
         {
+            // StartRoomタグの床を優先的に探す
+            if (preferStartRoom)
+            {
+                Vector3? startRoomPosition = FindStartRoomPosition();
+                if (startRoomPosition.HasValue)
+                {
+                    Debug.Log("StartRoomタグの床が見つかりました。そこにスポーンします。");
+                    return startRoomPosition.Value;
+                }
+                else
+                {
+                    Debug.LogWarning("StartRoomタグが見つかりません。通常の部屋選択を使用します。");
+                }
+            }
+
             RectInt targetRoom;
 
             if (spawnInFirstRoom || rooms.Count == 1)
@@ -120,6 +136,24 @@ namespace DungeonGen.Generation
                 currentPlayer = null;
                 Debug.Log("プレイヤーを削除しました。");
             }
+        }
+
+        /// <summary>
+        /// StartRoomタグの床を探してその位置を返す
+        /// </summary>
+        private Vector3? FindStartRoomPosition()
+        {
+            GameObject[] startRoomObjects = GameObject.FindGameObjectsWithTag("StartRoom");
+
+            if (startRoomObjects.Length > 0)
+            {
+                // 最初に見つかったStartRoomタグのオブジェクトの位置を使用
+                Vector3 startPosition = startRoomObjects[0].transform.position;
+                startPosition.y = spawnHeight; // 高さを調整
+                return startPosition;
+            }
+
+            return null; // StartRoomタグが見つからない
         }
 
         /// <summary>
